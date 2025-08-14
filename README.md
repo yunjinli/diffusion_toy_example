@@ -86,7 +86,7 @@ RESUME_CHECKPOINT=checkpoints/ldm_epoch_5.pt DATA_DIR=/path/to/data BATCH_SIZE=2
 Generate images from text prompts using a trained LDM:
 
 ```bash
-python sample_latent_diffusion_celeba.py
+CHECKPOINT_PATH=checkpoints/ldm_epoch_1.pt python sample_latent_diffusion_celeba.py
 ```
 
 ## Notes

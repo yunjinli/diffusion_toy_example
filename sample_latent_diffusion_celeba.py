@@ -3,9 +3,11 @@ from diffusers import AutoencoderKL, UNet2DConditionModel, DDPMScheduler
 from transformers import CLIPTextModel, CLIPTokenizer
 import cv2
 import numpy as np
+import os
+from tqdm import tqdm
 
 # Paths to checkpoints
-CHECKPOINT_PATH = "checkpoints/ldm_epoch_1.pt"  # Change to your desired checkpoint
+CHECKPOINT_PATH = os.environ.get('CHECKPOINT_PATH', None)  # Change to your desired checkpoint
 
 # Device
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -40,7 +42,7 @@ unet.load_state_dict(ckpt['unet_state_dict'])
 # text_encoder.load_state_dict(ckpt['text_encoder_state_dict'])
 
 # Sampling function
-def sample_ldm(prompt, num_steps=50, latent_shape=(1, 4, 32, 32)):
+def sample_ldm(prompt, num_steps=1000, latent_shape=(1, 4, 32, 32)):
     # Encode prompt
     inputs = tokenizer([prompt], padding="max_length", truncation=True, max_length=77, return_tensors="pt")
     input_ids = inputs.input_ids.to(DEVICE)
@@ -48,7 +50,10 @@ def sample_ldm(prompt, num_steps=50, latent_shape=(1, 4, 32, 32)):
     text_embeds = text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
     # Start from pure noise in latent space
     latents = torch.randn(latent_shape, device=DEVICE)
-    for t in reversed(range(num_steps)):
+    # Ensure scheduler tensors are on the same device as latents
+    noise_scheduler.alphas_cumprod = noise_scheduler.alphas_cumprod.to(DEVICE)
+    noise_scheduler.betas = noise_scheduler.betas.to(DEVICE)
+    for t in tqdm(reversed(range(num_steps))):
         timesteps = torch.full((latents.shape[0],), t, device=DEVICE, dtype=torch.long)
         with torch.no_grad():
             noise_pred = unet(latents, timesteps, text_embeds).sample
