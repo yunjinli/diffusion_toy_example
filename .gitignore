@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+
+# VS Code
+.vscode/
+
+# Data and checkpoints
+checkpoints/
+*.ckpt
+*.pt
+*.pth
+*.h5
+*.npz
+*.npy
+*.csv
+*.tsv
+*.log
+*.out
+*.err
+*.tmp
+*.bak
+
+# Images and results
+*.png
+*.jpg
+*.jpeg
+*.bmp
+*.gif
+*.tiff
+results/
+
+# Environment
+.env
+.venv/
+.envrc
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Misc
+*.swp
+*.swo
+*.orig
+*.~
