@@ -40,58 +40,45 @@ conda activate celeba_diffusion
 ### 3. Install required libraries
 
 ```bash
-# PyTorch (choose the right CUDA version for your GPU)
-conda install pytorch torchvision torchaudio cudatoolkit=11.8 -c pytorch -y
+pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu126
 
 # Hugging Face Diffusers & Transformers
 pip install diffusers transformers
 
 # Other dependencies
-pip install tqdm opencv-python pandas pillow matplotlib
-```
-
-### 4. (Optional) For multi-GPU training
-
-```bash
-pip install torch --upgrade
+pip install tqdm opencv-python pandas pillow matplotlib accelerate
 ```
 
 ## Data Preparation
 
 1. Download `img_align_celeba.zip` and `list_attr_celeba.txt` from the [official CelebA site](http://mmlab.ie.cuhk.edu.hk/projects/CelebA.html).
-2. Place them in `/mnt/sda/celeba` (or update `DATA_DIR` in `prepare_celeba.py`).
+2. Place them in `DATA_DIR`.
 3. Run:
 
 ```bash
-python prepare_celeba.py
+DATA_DIR=/path/to/data python prepare_celeba.py
 ```
 
 ## Training
-
-### Pixel-space diffusion
-
-```bash
-python train_diffusion_celeba.py
-```
 
 ### Latent diffusion (LDM)
 
 Single GPU:
 
 ```bash
-python train_latent_diffusion_celeba.py
+DATA_DIR=/path/to/data BATCH_SIZE=256 EPOCHS=100 python train_latent_diffusion_celeba.py
 ```
 
 Multi-GPU (DDP):
 
 ```bash
-torchrun --nproc_per_node=2 train_latent_diffusion_celeba.py
+DATA_DIR=/path/to/data BATCH_SIZE=256 EPOCHS=100 torchrun --nproc_per_node=2 train_latent_diffusion_celeba.py
 ```
 
 Resume training:
 
 ```bash
-RESUME_CHECKPOINT=checkpoints/ldm_epoch_5.pt python train_latent_diffusion_celeba.py
+RESUME_CHECKPOINT=checkpoints/ldm_epoch_5.pt DATA_DIR=/path/to/data BATCH_SIZE=256 EPOCHS=100 python train_latent_diffusion_celeba.py
 ```
 
 ## Sampling
@@ -105,7 +92,6 @@ python sample_latent_diffusion_celeba.py
 ## Notes
 
 - Checkpoints are saved in `checkpoints/` after each epoch.
-- The text encoder (CLIP) is frozen during training for best results.
 - Visualization panels show denoised and ground truth images during training.
 - For custom data paths or batch sizes, edit the relevant script variables.
 

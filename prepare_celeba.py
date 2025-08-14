@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 
 CELEBA_IMG_URL = "https://drive.google.com/uc?export=download&id=0B7EVK8r0v71pZjFTYXZWM3FlRnM"
 CELEBA_ATTR_URL = "https://drive.google.com/uc?export=download&id=0B7EVK8r0v71pblRyaVFSWGxPY0U"
-DATA_DIR = "/mnt/sda/celeba"
+DATA_DIR = os.environ.get('DATA_DIR', "/mnt/sda/celeba")
 IMG_DIR = os.path.join(DATA_DIR, "img_align_celeba")
 ATTR_PATH = os.path.join(DATA_DIR, "list_attr_celeba.txt")
 
@@ -36,13 +36,13 @@ def unzip_file(zip_path, extract_to):
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # Images (manual download recommended due to Google Drive restrictions)
-print("Please manually download 'img_align_celeba.zip' from the official CelebA site and place it in /mnt/sda/celeba.")
+print(f"Please manually download 'img_align_celeba.zip' from the official CelebA site and place it in {DATA_DIR}.")
 if os.path.exists(os.path.join(DATA_DIR, "img_align_celeba.zip")) and not os.path.exists(IMG_DIR):
     unzip_file(os.path.join(DATA_DIR, "img_align_celeba.zip"), DATA_DIR)
 
 # Attributes
 if not os.path.exists(ATTR_PATH):
-    print("Please manually download 'list_attr_celeba.txt' from the official CelebA site and place it in /mnt/sda/celeba.")
+    print(f"Please manually download 'list_attr_celeba.txt' from the official CelebA site and place it in {DATA_DIR}.")
 
 # Attribute to caption
 ATTRIBUTES = [

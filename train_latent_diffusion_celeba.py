@@ -1,3 +1,4 @@
+import os
 import torch
 from torch.utils.data import DataLoader
 from torchvision import transforms
@@ -7,16 +8,20 @@ from prepare_celeba import CelebATextDataset, IMG_DIR, ATTR_PATH
 from tqdm import tqdm
 import cv2
 import numpy as np
-import os
+
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
-
+from torchinfo import summary
 # Hyperparameters
-BATCH_SIZE = 128
+# BATCH_SIZE = 128
+BATCH_SIZE = (int)(os.environ.get('BATCH_SIZE', 128))
 IMG_SIZE = 128
-EPOCHS = 10
+# EPOCHS = 10
+EPOCHS = (int)(os.environ.get('EPOCHS', 10))
 LR = 1e-4
+
+
 
 # Distributed training setup
 use_ddp = False
@@ -30,6 +35,11 @@ if 'RANK' in os.environ:
 else:
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
+if not use_ddp or dist.get_rank() == 0:
+    print("Training Setting: ")
+    print(f"BATCH_SIZE: ", BATCH_SIZE)
+    print(f"EPOCHS: ", EPOCHS)
+
 # Load VAE (pretrained)
 vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-ema")
 vae = vae.to(DEVICE)
@@ -37,13 +47,17 @@ if use_ddp:
     vae = DDP(vae, device_ids=[local_rank])
 vae.eval()  # VAE is frozen during LDM training
 
+if not use_ddp or dist.get_rank() == 0:
+    print(summary(vae))
 # Load text encoder and tokenizer
 tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
 text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14").to(DEVICE)
-
+text_encoder.eval()
 # Freeze text encoder
 for param in text_encoder.parameters():
     param.requires_grad = False
+
+print(summary(text_encoder))
 
 # Load UNet and scheduler (smaller config for speed)
 unet = UNet2DConditionModel(
@@ -85,7 +99,9 @@ optimizer = torch.optim.Adam(unet.parameters(), lr=LR)
 
 # Checkpoint directory
 checkpoint_dir = "checkpoints"
-os.makedirs(checkpoint_dir, exist_ok=True)
+
+if not use_ddp or dist.get_rank() == 0:
+    os.makedirs(checkpoint_dir, exist_ok=True)
 
 # Resume from checkpoint if specified
 resume_path = os.environ.get('RESUME_CHECKPOINT', None)
@@ -111,7 +127,11 @@ for epoch in range(start_epoch, EPOCHS):
         images = images.to(DEVICE)
         # Encode images to latent space
         with torch.no_grad():
-            latents = vae.encode(images).latent_dist.sample() * 0.18215  # SD scaling
+            if use_ddp:
+                latents = vae.module.encode(images).latent_dist.sample() * 0.18215  # SD scaling
+            else:
+                latents = vae.encode(images).latent_dist.sample() * 0.18215  # SD scaling
+                
         # Tokenize and encode text
         # inputs = tokenizer(list(captions), padding="max_length", max_length=77, return_tensors="pt")
         inputs = tokenizer(list(captions), padding="max_length", truncation=True, max_length=77, return_tensors="pt")
@@ -137,7 +157,10 @@ for epoch in range(start_epoch, EPOCHS):
                 # Denoise latents (simple subtraction)
                 denoised_latents = (noisy_latents - noise_pred).clamp(-1, 1)
                 # Decode to image space
-                denoised_imgs = vae.decode(denoised_latents / 0.18215).sample.clamp(0, 1).cpu()
+                if use_ddp:
+                    denoised_imgs = vae.module.decode(denoised_latents / 0.18215).sample.clamp(0, 1).cpu()
+                else:
+                    denoised_imgs = vae.decode(denoised_latents / 0.18215).sample.clamp(0, 1).cpu()
                 gt_imgs = images.cpu()
                 panels = []
                 for idx in range(denoised_imgs.shape[0]):
