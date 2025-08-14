@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 import os
 from tqdm import tqdm
-
+from torchinfo import summary
 # Paths to checkpoints
 CHECKPOINT_PATH = os.environ.get('CHECKPOINT_PATH', None)  # Change to your desired checkpoint
 
@@ -40,7 +40,10 @@ noise_scheduler = DDPMScheduler(num_train_timesteps=1000)
 ckpt = torch.load(CHECKPOINT_PATH, map_location=DEVICE)
 unet.load_state_dict(ckpt['unet_state_dict'])
 # text_encoder.load_state_dict(ckpt['text_encoder_state_dict'])
-
+unet.eval()
+vae.eval()
+text_encoder.eval()
+print(summary(unet))
 # Sampling function
 def sample_ldm(prompt, num_steps=1000, latent_shape=(1, 4, 32, 32)):
     # Encode prompt

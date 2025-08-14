@@ -85,7 +85,8 @@ noise_scheduler = DDPMScheduler(num_train_timesteps=1000)
 # Load CelebA dataset
 transform = transforms.Compose([
     transforms.Resize((IMG_SIZE, IMG_SIZE)),
-    transforms.ToTensor()
+    transforms.ToTensor(),
+    transforms.Normalize([0.5], [0.5])  # Normalize to [-1, 1] for VAE
 ])
 dataset = CelebATextDataset(IMG_DIR, ATTR_PATH, transform=transform)
 if use_ddp:
@@ -153,7 +154,7 @@ for epoch in range(start_epoch, EPOCHS):
 
         # Visualize denoised vs. ground truth every 5 steps
         if not use_ddp or dist.get_rank() == 0:
-            if i % 100 == 0:
+            if i % 10 == 0:
                 with torch.no_grad():
                     # Denoise latents (simple subtraction)
                     denoised_latents = (noisy_latents - noise_pred).clamp(-1, 1)
@@ -163,6 +164,7 @@ for epoch in range(start_epoch, EPOCHS):
                     else:
                         denoised_imgs = vae.decode(denoised_latents / 0.18215).sample.clamp(0, 1).cpu()
                     gt_imgs = images.cpu()
+                    gt_imgs = (gt_imgs * 0.5 + 0.5).clamp(0, 1)
                     panels = []
                     for idx in range(denoised_imgs.shape[0]):
                         denoised = denoised_imgs[idx].permute(1, 2, 0).numpy()
