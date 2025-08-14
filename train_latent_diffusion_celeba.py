@@ -152,41 +152,42 @@ for epoch in range(start_epoch, EPOCHS):
         pbar.set_postfix({"loss": loss.item()})
 
         # Visualize denoised vs. ground truth every 5 steps
-        if i % 100 == 0:
-            with torch.no_grad():
-                # Denoise latents (simple subtraction)
-                denoised_latents = (noisy_latents - noise_pred).clamp(-1, 1)
-                # Decode to image space
-                if use_ddp:
-                    denoised_imgs = vae.module.decode(denoised_latents / 0.18215).sample.clamp(0, 1).cpu()
-                else:
-                    denoised_imgs = vae.decode(denoised_latents / 0.18215).sample.clamp(0, 1).cpu()
-                gt_imgs = images.cpu()
-                panels = []
-                for idx in range(denoised_imgs.shape[0]):
-                    denoised = denoised_imgs[idx].permute(1, 2, 0).numpy()
-                    gt = gt_imgs[idx].permute(1, 2, 0).numpy()
-                    denoised = np.clip(denoised, 0, 1)
-                    gt = np.clip(gt, 0, 1)
-                    denoised_bgr = cv2.cvtColor((denoised * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
-                    gt_bgr = cv2.cvtColor((gt * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
-                    panels.append(cv2.hconcat([denoised_bgr, gt_bgr]))
-                # Arrange panels in a grid: max 4 rows, more columns if needed
-                max_rows = 4
-                batch = len(panels)
-                n_cols = int(np.ceil(batch / max_rows))
-                grid = []
-                for r in range(max_rows):
-                    row_panels = panels[r*n_cols:(r+1)*n_cols]
-                    if row_panels:
-                        # Pad row if not enough columns
-                        while len(row_panels) < n_cols:
-                            h, w, c = row_panels[0].shape
-                            row_panels.append(np.zeros((h, w, c), dtype=np.uint8))
-                        grid.append(cv2.hconcat(row_panels))
-                panel = cv2.vconcat(grid)
-                cv2.imshow('Denoised | Ground Truth', panel)
-                cv2.waitKey(1)
+        if not use_ddp or dist.get_rank() == 0:
+            if i % 100 == 0:
+                with torch.no_grad():
+                    # Denoise latents (simple subtraction)
+                    denoised_latents = (noisy_latents - noise_pred).clamp(-1, 1)
+                    # Decode to image space
+                    if use_ddp:
+                        denoised_imgs = vae.module.decode(denoised_latents / 0.18215).sample.clamp(0, 1).cpu()
+                    else:
+                        denoised_imgs = vae.decode(denoised_latents / 0.18215).sample.clamp(0, 1).cpu()
+                    gt_imgs = images.cpu()
+                    panels = []
+                    for idx in range(denoised_imgs.shape[0]):
+                        denoised = denoised_imgs[idx].permute(1, 2, 0).numpy()
+                        gt = gt_imgs[idx].permute(1, 2, 0).numpy()
+                        denoised = np.clip(denoised, 0, 1)
+                        gt = np.clip(gt, 0, 1)
+                        denoised_bgr = cv2.cvtColor((denoised * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
+                        gt_bgr = cv2.cvtColor((gt * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
+                        panels.append(cv2.hconcat([denoised_bgr, gt_bgr]))
+                    # Arrange panels in a grid: max 4 rows, more columns if needed
+                    max_rows = 4
+                    batch = len(panels)
+                    n_cols = int(np.ceil(batch / max_rows))
+                    grid = []
+                    for r in range(max_rows):
+                        row_panels = panels[r*n_cols:(r+1)*n_cols]
+                        if row_panels:
+                            # Pad row if not enough columns
+                            while len(row_panels) < n_cols:
+                                h, w, c = row_panels[0].shape
+                                row_panels.append(np.zeros((h, w, c), dtype=np.uint8))
+                            grid.append(cv2.hconcat(row_panels))
+                    panel = cv2.vconcat(grid)
+                    cv2.imshow('Denoised | Ground Truth', panel)
+                    cv2.waitKey(1)
     print(f"Epoch {epoch+1} finished.")
     # Save checkpoint only on rank 0
     if not use_ddp or dist.get_rank() == 0:
