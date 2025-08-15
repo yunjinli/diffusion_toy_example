@@ -49,7 +49,7 @@ vae.eval()
 text_encoder.eval()
 print(summary(unet))
 # Sampling function
-def sample_ldm(prompt, num_steps=1000, latent_shape=(1, 4, 32, 32)):
+def sample_ldm(prompt, num_steps=1000, latent_shape=(1, 4, 16, 16)):
     # Encode prompt
     inputs = tokenizer([prompt], padding="max_length", truncation=True, max_length=77, return_tensors="pt")
     input_ids = inputs.input_ids.to(DEVICE)
