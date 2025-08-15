@@ -23,7 +23,7 @@ from distributed import (
     init_seeds
 )
 
-import lpips
+# import lpips
 
 class AverageMeter:
     """Computes and stores the average and current value."""
@@ -93,7 +93,7 @@ try:
 
     # Load UNet and scheduler (smaller config for speed)
     unet = UNet2DConditionModel(
-        sample_size=32,  # Latent size (VAE downsamples by 4)
+        sample_size=16,  # Latent size (VAE downsamples by 4)
         in_channels=4,   # VAE latent channels
         out_channels=4,
         layers_per_block=2,
@@ -126,7 +126,7 @@ try:
     transform = transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
         transforms.ToTensor(),
-        transforms.Normalize([0.5], [0.5])  # Normalize to [-1, 1] for VAE
+        transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])  # Normalize to [-1, 1] for VAE
     ])
     dataset = CelebATextDataset(IMG_DIR, ATTR_PATH, transform=transform)
     if use_ddp:
@@ -165,7 +165,7 @@ try:
         print(f"Resumed at epoch {start_epoch}")
 
     best_loss = float('inf')
-    perceptual_loss_fn = lpips.LPIPS(net='vgg').to(DEVICE) # closer to "traditional" perceptual loss, when used for optimization
+    # perceptual_loss_fn = lpips.LPIPS(net='vgg').to(DEVICE) # closer to "traditional" perceptual loss, when used for optimization
     
     # Training loop
     for epoch in range(start_epoch, EPOCHS):
@@ -203,14 +203,15 @@ try:
             # Predict noise in latent space
             noise_pred = unet(noisy_latents, timesteps, text_embeds).sample
             # Loss
-            loss = torch.nn.functional.mse_loss(noise_pred, noise) / (latents.var() + 1e-5)
+            # loss = torch.nn.functional.mse_loss(noise_pred, noise) / (latents.var() + 1e-5)
+            loss = torch.nn.functional.mse_loss(noise_pred, noise)
             
-            denoised_latents = (noisy_latents - noise_pred).clamp(-1, 1)
-            with torch.no_grad():
-                denoised_imgs = vae.decode(denoised_latents / 0.18215).sample.clamp(-1, 1)
+            # denoised_latents = (noisy_latents - noise_pred).clamp(-1, 1)
+            # with torch.no_grad():
+            #     denoised_imgs = vae.decode(denoised_latents / 0.18215).sample.clamp(-1, 1)
             
-            perceptual_loss = perceptual_loss_fn(denoised_imgs, images).mean()
-            loss += perceptual_loss * 0.1  # Adjust weight as needed
+            # perceptual_loss = perceptual_loss_fn(denoised_imgs, images).mean()
+            # loss += perceptual_loss * 0.1  # Adjust weight as needed
             
             loss.backward()
             optimizer.step()
@@ -224,7 +225,7 @@ try:
                 monitor = {
                     'Loss': f'{loss_meter.val:.4f} ({loss_meter.avg:.4f})',
                     'CUDA': f'{cuda_mem.val:.2f} ({cuda_mem.avg:.2f})',
-                    'PLoss': f'{perceptual_loss.item():.4f}',
+                    # 'PLoss': f'{perceptual_loss.item():.4f}',
                 }
                 pbar.set_postfix(monitor)
             # Visualize denoised vs. ground truth every 5 steps
@@ -232,17 +233,21 @@ try:
                 if i % 10 == 0:
                     with torch.no_grad():
                         # Denoise latents (simple subtraction)
-                        denoised_latents = (noisy_latents - noise_pred).clamp(-1, 1)
+                        # denoised_latents = (noisy_latents - noise_pred).clamp(-1, 1)
+                        alpha_bar = noise_scheduler.alphas_cumprod[timesteps].view(-1, 1, 1, 1)  # (B,1,1,1)
+                        pred_x0 = (noisy_latents - torch.sqrt(1 - alpha_bar) * noise_pred) / torch.sqrt(alpha_bar)
                         # Decode to image space
                         # if use_ddp:
                         #     denoised_imgs = vae.module.decode(denoised_latents / 0.18215).sample.clamp(0, 1).cpu()
                         # else:
                         # denoised_imgs = vae.decode(denoised_latents / 0.18215).sample.clamp(0, 1).cpu()
-                        denoised_imgs = vae.decode(denoised_latents / 0.18215).sample.clamp(-1, 1).cpu()
+                        # denoised_imgs = vae.decode(denoised_latents / 0.18215).sample.clamp(-1, 1).cpu()
+                        with torch.no_grad():
+                            denoised_imgs = vae.decode(pred_x0 / 0.18215).sample
                         gt_imgs = images.cpu()
                         gt_imgs = (gt_imgs * 0.5 + 0.5).clamp(0, 1)
 
-                        denoised_imgs = (denoised_imgs * 0.5 + 0.5)
+                        denoised_imgs = (denoised_imgs * 0.5 + 0.5).clamp(0, 1).cpu()
                         panels = []
                         for idx in range(denoised_imgs.shape[0]):
                             denoised = denoised_imgs[idx].permute(1, 2, 0).numpy()

@@ -49,11 +49,61 @@ ATTRIBUTES = [
     "5_o_Clock_Shadow", "Arched_Eyebrows", "Attractive", "Bags_Under_Eyes", "Bald", "Bangs", "Big_Lips", "Big_Nose", "Black_Hair", "Blond_Hair", "Blurry", "Brown_Hair", "Bushy_Eyebrows", "Chubby", "Double_Chin", "Eyeglasses", "Goatee", "Gray_Hair", "Heavy_Makeup", "High_Cheekbones", "Male", "Mouth_Slightly_Open", "Mustache", "Narrow_Eyes", "No_Beard", "Oval_Face", "Pale_Skin", "Pointy_Nose", "Receding_Hairline", "Rosy_Cheeks", "Sideburns", "Smiling", "Straight_Hair", "Wavy_Hair", "Wearing_Earrings", "Wearing_Hat", "Wearing_Lipstick", "Wearing_Necklace", "Wearing_Necktie", "Young"
 ]
 
+# def attr_to_caption(attr_row):
+#     attrs = [ATTRIBUTES[i] for i, v in enumerate(attr_row) if v == 1]
+#     if not attrs:
+#         return "A face."
+#     return "A face with " + ", ".join(attrs) + "."
+
+ATTR_READABLE = {
+    "5_o_Clock_Shadow": "a five o'clock shadow",
+    "Arched_Eyebrows": "arched eyebrows",
+    "Attractive": "attractive",
+    "Bags_Under_Eyes": "bags under the eyes",
+    "Bald": "bald",
+    "Bangs": "bangs",
+    "Big_Lips": "big lips",
+    "Big_Nose": "a big nose",
+    "Black_Hair": "black hair",
+    "Blond_Hair": "blond hair",
+    "Blurry": "blurry",
+    "Brown_Hair": "brown hair",
+    "Bushy_Eyebrows": "bushy eyebrows",
+    "Chubby": "chubby cheeks",
+    "Double_Chin": "a double chin",
+    "Eyeglasses": "wearing glasses",
+    "Goatee": "a goatee",
+    "Gray_Hair": "gray hair",
+    "Heavy_Makeup": "wearing heavy makeup",
+    "High_Cheekbones": "high cheekbones",
+    "Male": "male",
+    "Mouth_Slightly_Open": "mouth slightly open",
+    "Mustache": "a mustache",
+    "Narrow_Eyes": "narrow eyes",
+    "No_Beard": "no beard",
+    "Oval_Face": "an oval face",
+    "Pale_Skin": "pale skin",
+    "Pointy_Nose": "a pointy nose",
+    "Receding_Hairline": "a receding hairline",
+    "Rosy_Cheeks": "rosy cheeks",
+    "Sideburns": "sideburns",
+    "Smiling": "smiling",
+    "Straight_Hair": "straight hair",
+    "Wavy_Hair": "wavy hair",
+    "Wearing_Earrings": "wearing earrings",
+    "Wearing_Hat": "wearing a hat",
+    "Wearing_Lipstick": "wearing lipstick",
+    "Wearing_Necklace": "wearing a necklace",
+    "Wearing_Necktie": "wearing a necktie",
+    "Young": "young"
+}
+
 def attr_to_caption(attr_row):
-    attrs = [ATTRIBUTES[i] for i, v in enumerate(attr_row) if v == 1]
+    attrs = [ATTR_READABLE[ATTRIBUTES[i]] for i, v in enumerate(attr_row) if v == 1]
     if not attrs:
-        return "A face."
-    return "A face with " + ", ".join(attrs) + "."
+        return "A portrait of a person."
+    return "A portrait of a person with " + ", ".join(attrs) + "."
+
 
 # PyTorch Dataset
 class CelebATextDataset(Dataset):
