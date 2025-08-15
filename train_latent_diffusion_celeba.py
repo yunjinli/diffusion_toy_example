@@ -104,8 +104,8 @@ try:
         # block_out_channels=(128, 256, 512),
         # block_out_channels=(64, 128, 256),
         # block_out_channels=(64, 128, 256, 256),
-        layers_per_block=3,
-        block_out_channels=(128, 256, 512, 512),
+        layers_per_block=2,
+        block_out_channels=(64, 128, 256, 512),
         down_block_types=(
             "CrossAttnDownBlock2D",
             "CrossAttnDownBlock2D",
@@ -155,7 +155,7 @@ try:
     scaler = GradScaler(enabled=USE_AMP)
     
     # Checkpoint directory
-    checkpoint_dir = "checkpoints1"
+    checkpoint_dir = "checkpoints"
 
     if not use_ddp or dist.get_rank() == 0:
         os.makedirs(checkpoint_dir, exist_ok=True)

@@ -20,7 +20,8 @@ unet = UNNet = UNet2DConditionModel(
     in_channels=4,
     out_channels=4,
     layers_per_block=2,
-    block_out_channels=(64, 128, 256, 256),
+    # block_out_channels=(64, 128, 256, 256),
+    block_out_channels=(64, 128, 256, 512),
     down_block_types=("CrossAttnDownBlock2D", "CrossAttnDownBlock2D", "CrossAttnDownBlock2D", "DownBlock2D"),
     up_block_types=("UpBlock2D", "CrossAttnUpBlock2D", "CrossAttnUpBlock2D", "CrossAttnUpBlock2D"),
     cross_attention_dim=text_encoder.config.hidden_size,
@@ -114,9 +115,11 @@ if __name__ == "__main__":
             "A portrait of a young woman smiling with blond hair",
             "A portrait of a male wearing glasses with a five o'clock shadow",
             "A portrait of a person with wavy hair, rosy cheeks, and wearing a hat",
+            "A portrait of a young male with mustache with dark skin",
         ],
         negative_prompts="blurry, low quality",
-        num_inference_steps=50,     # try 25–75
+        num_inference_steps=1000,     # try 25–75
+        # guidance_scale=7.5,         # try 5–9
         guidance_scale=7.5,         # try 5–9
         seed=42,
         out_path="preview_grid.png",
