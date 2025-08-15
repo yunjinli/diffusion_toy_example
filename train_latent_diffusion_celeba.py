@@ -96,14 +96,17 @@ try:
         out_channels=4,
         layers_per_block=2,
         # block_out_channels=(128, 256, 512),
-        block_out_channels=(64, 128, 256),
+        # block_out_channels=(64, 128, 256),
+        block_out_channels=(64, 128, 256, 768),
         down_block_types=(
+            "CrossAttnDownBlock2D",
             "CrossAttnDownBlock2D",
             "CrossAttnDownBlock2D",
             "DownBlock2D"
         ),
         up_block_types=(
             "UpBlock2D",
+            "CrossAttnUpBlock2D",
             "CrossAttnUpBlock2D",
             "CrossAttnUpBlock2D"
         ),
@@ -139,7 +142,7 @@ try:
     optimizer = torch.optim.Adam(unet.parameters(), lr=LR)
 
     # Checkpoint directory
-    checkpoint_dir = "checkpoints"
+    checkpoint_dir = "checkpoints1"
 
     if not use_ddp or dist.get_rank() == 0:
         os.makedirs(checkpoint_dir, exist_ok=True)

@@ -7,7 +7,7 @@ import os
 from tqdm import tqdm
 from torchinfo import summary
 # Paths to checkpoints
-CHECKPOINT_PATH = os.environ.get('CHECKPOINT_PATH', None)  # Change to your desired checkpoint
+CHECKPOINT_PATH = os.environ.get('CHECKPOINT_PATH', "./checkpoints/ldm_epoch_best.pt")  # Change to your desired checkpoint
 
 # Device
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -20,8 +20,8 @@ unet = UNet2DConditionModel(
     sample_size=32,
     in_channels=4,
     out_channels=4,
-    layers_per_block=1,
-    block_out_channels=(128, 256, 512),
+    layers_per_block=2,
+    block_out_channels=(64, 128, 256),
     down_block_types=(
         "CrossAttnDownBlock2D",
         "CrossAttnDownBlock2D",
@@ -63,7 +63,8 @@ def sample_ldm(prompt, num_steps=1000, latent_shape=(1, 4, 32, 32)):
         latents = noise_scheduler.step(noise_pred, timesteps, latents).prev_sample
     # Decode to image
     with torch.no_grad():
-        imgs = vae.decode(latents / 0.18215).sample.clamp(0, 1).cpu()
+        # imgs = vae.decode(latents / 0.18215).sample.clamp(0, 1).cpu()
+        imgs = vae.decode(latents / 0.18215).sample.clamp(-1, 1).cpu()
     # Convert to displayable format
     img = imgs[0].permute(1, 2, 0).numpy()
     img = np.clip(img, 0, 1)
