@@ -69,6 +69,12 @@ Single GPU:
 DATA_DIR=/path/to/data BATCH_SIZE=256 EPOCHS=100 python train_latent_diffusion_celeba.py
 ```
 
+Additional environment variables:
+
+- `LR`: learning rate (default `1e-4`)
+- `UNET_INIT_PATH`: path to a checkpoint to initialize the UNet from
+- `USE_AMP`: set to `0` to disable automatic mixed precision (default `1`)
+
 Multi-GPU (DDP):
 
 ```bash
@@ -88,6 +94,12 @@ Generate images from text prompts using a trained LDM:
 ```bash
 CHECKPOINT_PATH=checkpoints/ldm_epoch_1.pt python sample_latent_diffusion_celeba.py
 ```
+
+Sampling can also be configured via environment variables:
+
+- `NUM_INFERENCE_STEPS`: number of denoising steps (default `50`)
+- `GUIDANCE_SCALE`: classifier-free guidance scale (default `7.5`)
+- `SCHEDULER`: `ddpm` or `ddim` scheduler (default `ddpm`)
 
 ## Notes
 

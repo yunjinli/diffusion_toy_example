@@ -1,7 +1,7 @@
 import os
 import torch
 import torchvision
-from diffusers import AutoencoderKL, UNet2DConditionModel, DDPMScheduler
+from diffusers import AutoencoderKL, UNet2DConditionModel, DDPMScheduler, DDIMScheduler
 from transformers import CLIPTextModel, CLIPTokenizer
 
 # ---------- Config ----------
@@ -9,18 +9,21 @@ CHECKPOINT_PATH = os.environ.get("CHECKPOINT_PATH", "./checkpoints/ldm_epoch_bes
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 LATENT_SHAPE = (4, 16, 16)  # (C, H, W) for 128x128 images with sd-vae-ft-ema
 VAE_SCALE = 0.18215
+NUM_INFERENCE_STEPS = int(os.environ.get("NUM_INFERENCE_STEPS", 50))
+GUIDANCE_SCALE = float(os.environ.get("GUIDANCE_SCALE", 7.5))
+SCHEDULER_NAME = os.environ.get("SCHEDULER", "ddpm").lower()
 
 # ---------- Load models ----------
 vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-ema").to(DEVICE)
 tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
 text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14").to(DEVICE)
 
-unet = UNNet = UNet2DConditionModel(
+unet = UNet2DConditionModel(
     sample_size=16,
     in_channels=4,
     out_channels=4,
-    layers_per_block=2,
-    block_out_channels=(64, 128, 256, 256),
+    layers_per_block=3,
+    block_out_channels=(128, 256, 512, 512),
     down_block_types=("CrossAttnDownBlock2D", "CrossAttnDownBlock2D", "CrossAttnDownBlock2D", "DownBlock2D"),
     up_block_types=("UpBlock2D", "CrossAttnUpBlock2D", "CrossAttnUpBlock2D", "CrossAttnUpBlock2D"),
     cross_attention_dim=text_encoder.config.hidden_size,
@@ -31,8 +34,11 @@ ckpt = torch.load(CHECKPOINT_PATH, map_location=DEVICE)
 unet.load_state_dict(ckpt["unet_state_dict"])
 vae.eval(); text_encoder.eval(); unet.eval()
 
-# DDPM scheduler (epsilon prediction like training)
-scheduler = DDPMScheduler(num_train_timesteps=1000, prediction_type="epsilon")
+# Diffusion scheduler (DDPM by default, DDIM optional)
+if SCHEDULER_NAME == "ddim":
+    scheduler = DDIMScheduler(num_train_timesteps=1000, prediction_type="epsilon")
+else:
+    scheduler = DDPMScheduler(num_train_timesteps=1000, prediction_type="epsilon")
 
 @torch.no_grad()
 def encode_prompts(prompts, negative_prompts=None, device=DEVICE):
@@ -61,8 +67,8 @@ def encode_prompts(prompts, negative_prompts=None, device=DEVICE):
 def generate(
     prompts,
     negative_prompts=None,
-    num_inference_steps=50,
-    guidance_scale=7.5,
+    num_inference_steps=NUM_INFERENCE_STEPS,
+    guidance_scale=GUIDANCE_SCALE,
     seed=None,
     out_path="samples.png",
     device=DEVICE,
@@ -116,8 +122,8 @@ if __name__ == "__main__":
             "A portrait of a person with wavy hair, rosy cheeks, and wearing a hat",
         ],
         negative_prompts="blurry, low quality",
-        num_inference_steps=50,     # try 25–75
-        guidance_scale=7.5,         # try 5–9
+        num_inference_steps=NUM_INFERENCE_STEPS,
+        guidance_scale=GUIDANCE_SCALE,
         seed=42,
         out_path="preview_grid.png",
     )

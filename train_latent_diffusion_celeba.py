@@ -4,6 +4,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from diffusers import AutoencoderKL, UNet2DConditionModel, DDPMScheduler
 from transformers import CLIPTextModel, CLIPTokenizer
+from torch.cuda.amp import autocast, GradScaler
 from prepare_celeba import CelebATextDataset, IMG_DIR, ATTR_PATH
 from tqdm import tqdm
 import cv2
@@ -49,7 +50,9 @@ BATCH_SIZE = (int)(os.environ.get('BATCH_SIZE', 128))
 IMG_SIZE = 128
 # EPOCHS = 10
 EPOCHS = (int)(os.environ.get('EPOCHS', 10))
-LR = 1e-4
+LR = float(os.environ.get('LR', 1e-4))
+UNET_INIT_PATH = os.environ.get('UNET_INIT_PATH')
+USE_AMP = torch.cuda.is_available() and bool(int(os.environ.get('USE_AMP', '1')))
 
 
 DEVICE, rank, world_size, local_rank = setup_distributed()
@@ -71,6 +74,7 @@ try:
         print("Training Setting: ")
         print(f"BATCH_SIZE: ", BATCH_SIZE)
         print(f"EPOCHS: ", EPOCHS)
+        print(f"USE_AMP: ", USE_AMP)
 
     # Load VAE (pretrained)
     vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-ema")
@@ -91,15 +95,13 @@ try:
 
     # print(summary(text_encoder))
 
-    # Load UNet and scheduler (smaller config for speed)
+    # Load UNet and scheduler (bigger config for better fidelity)
     unet = UNet2DConditionModel(
         sample_size=16,  # Latent size (VAE downsamples by 4)
         in_channels=4,   # VAE latent channels
         out_channels=4,
-        layers_per_block=2,
-        # block_out_channels=(128, 256, 512),
-        # block_out_channels=(64, 128, 256),
-        block_out_channels=(64, 128, 256, 256),
+        layers_per_block=3,
+        block_out_channels=(128, 256, 512, 512),
         down_block_types=(
             "CrossAttnDownBlock2D",
             "CrossAttnDownBlock2D",
@@ -115,6 +117,12 @@ try:
         cross_attention_dim=text_encoder.config.hidden_size,
     ).to(DEVICE)
 
+    # Optionally initialize from a pretrained UNet checkpoint
+    if UNET_INIT_PATH and os.path.exists(UNET_INIT_PATH):
+        ckpt = torch.load(UNET_INIT_PATH, map_location="cpu")
+        state_dict = ckpt.get("unet_state_dict", ckpt)
+        unet.load_state_dict(state_dict, strict=False)
+
     if is_main_process():
         print(summary(unet))
 
@@ -122,13 +130,16 @@ try:
         unet = DDP(unet, device_ids=[local_rank])
     noise_scheduler = DDPMScheduler(num_train_timesteps=1000)
 
-    # Load CelebA dataset
+    # Load CelebA dataset with simple augmentations
     transform = transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
+        transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])  # Normalize to [-1, 1] for VAE
     ])
     dataset = CelebATextDataset(IMG_DIR, ATTR_PATH, transform=transform)
+    if is_main_process():
+        print(f"Dataset size: {len(dataset)}")
     if use_ddp:
         sampler = DistributedSampler(
             dataset,
@@ -140,8 +151,10 @@ try:
     else:
         dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True)
 
-    # Optimizer
+    # Optimizer and optional scheduler
     optimizer = torch.optim.Adam(unet.parameters(), lr=LR)
+    lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
+    scaler = GradScaler(enabled=USE_AMP)
 
     # Checkpoint directory
     checkpoint_dir = "checkpoints1"
@@ -195,26 +208,29 @@ try:
             inputs = tokenizer(list(captions), padding="max_length", truncation=True, max_length=77, return_tensors="pt")
             input_ids = inputs.input_ids.to(DEVICE)
             attention_mask = inputs.attention_mask.to(DEVICE)
-            text_embeds = text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+            with torch.no_grad():
+                text_embeds = text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
             # Sample random timesteps
             timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (latents.shape[0],), device=DEVICE)
             noise = torch.randn_like(latents)
             noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
-            # Predict noise in latent space
-            noise_pred = unet(noisy_latents, timesteps, text_embeds).sample
-            # Loss
-            # loss = torch.nn.functional.mse_loss(noise_pred, noise) / (latents.var() + 1e-5)
-            loss = torch.nn.functional.mse_loss(noise_pred, noise)
-            
+            # Predict noise in latent space and compute loss under autocast
+            with autocast(enabled=USE_AMP):
+                noise_pred = unet(noisy_latents, timesteps, text_embeds).sample
+                loss = torch.nn.functional.mse_loss(noise_pred, noise)
+
             # denoised_latents = (noisy_latents - noise_pred).clamp(-1, 1)
             # with torch.no_grad():
             #     denoised_imgs = vae.decode(denoised_latents / 0.18215).sample.clamp(-1, 1)
-            
+
             # perceptual_loss = perceptual_loss_fn(denoised_imgs, images).mean()
             # loss += perceptual_loss * 0.1  # Adjust weight as needed
-            
-            loss.backward()
-            optimizer.step()
+
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(unet.parameters(), 1.0)
+            scaler.step(optimizer)
+            scaler.update()
             optimizer.zero_grad()
             # pbar.set_postfix({"loss": loss.item()})
 
@@ -274,7 +290,7 @@ try:
                         cv2.imshow('Denoised | Ground Truth', panel)
                         cv2.waitKey(1)
         if is_main_process():
-            print(f"Epoch {epoch+1} finished.")
+            print(f"Epoch {epoch+1} finished. LR: {optimizer.param_groups[0]['lr']:.6f}")
             if loss_meter.avg < best_loss:
                 print(f"Saved best model at epoch {epoch + 1}")
                 best_loss = loss_meter.avg
@@ -294,6 +310,8 @@ try:
                 'optimizer_state_dict': optimizer.state_dict()
             }, os.path.join(checkpoint_dir, f"ldm_epoch_{epoch+1}.pt"))
             print(f"Checkpoint saved: ldm_epoch_{epoch+1}.pt")
+
+        lr_scheduler.step()
     cv2.destroyAllWindows()
     print("Latent diffusion training complete.")
 finally:
