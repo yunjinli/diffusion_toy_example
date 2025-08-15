@@ -53,7 +53,7 @@ EPOCHS = (int)(os.environ.get('EPOCHS', 10))
 # LR = 1e-4
 LR = float(os.environ.get('LR', 1e-4))
 USE_AMP = torch.cuda.is_available() and bool(int(os.environ.get('USE_AMP', '1')))
-
+CFG_DROPOUT = float(os.environ.get('CFG_DROPOUT', 0.15))
 
 DEVICE, rank, world_size, local_rank = setup_distributed()
 
@@ -75,7 +75,7 @@ try:
         print(f"BATCH_SIZE: ", BATCH_SIZE)
         print(f"EPOCHS: ", EPOCHS)
         print(f"USE_AMP: ", USE_AMP)
-
+        print(f"CFG_DROPOUT: ", CFG_DROPOUT)
     # Load VAE (pretrained)
     vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-ema")
     vae = vae.to(DEVICE)
@@ -172,6 +172,8 @@ try:
         else:
             unet.load_state_dict(unet_state)
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        if 'scheduler_state_dict' in checkpoint:
+            lr_scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         start_epoch = checkpoint.get('epoch', 0)
         print(f"Resumed at epoch {start_epoch}")
 
@@ -203,7 +205,21 @@ try:
                     
             # Tokenize and encode text
             # inputs = tokenizer(list(captions), padding="max_length", max_length=77, return_tensors="pt")
-            inputs = tokenizer(list(captions), padding="max_length", truncation=True, max_length=77, return_tensors="pt")
+            # inputs = tokenizer(list(captions), padding="max_length", truncation=True, max_length=77, return_tensors="pt")
+            
+            if CFG_DROPOUT > 0:
+                captions = [
+                    "" if torch.rand(1).item() < CFG_DROPOUT else cap
+                    for cap in captions
+                ]
+            # print(f"Captions: {captions}")  
+            inputs = tokenizer(
+                list(captions),
+                padding="max_length",
+                truncation=True,
+                max_length=77,
+                return_tensors="pt"
+            )
             input_ids = inputs.input_ids.to(DEVICE)
             attention_mask = inputs.attention_mask.to(DEVICE)
             # text_embeds = text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
@@ -245,6 +261,7 @@ try:
                 monitor = {
                     'Loss': f'{loss_meter.val:.4f} ({loss_meter.avg:.4f})',
                     'CUDA': f'{cuda_mem.val:.2f} ({cuda_mem.avg:.2f})',
+                    'LR': f'{optimizer.param_groups[0]['lr']:.6f}',
                     # 'PLoss': f'{perceptual_loss.item():.4f}',
                 }
                 pbar.set_postfix(monitor)
@@ -303,7 +320,8 @@ try:
                 torch.save({
                     'epoch': epoch + 1,
                     'unet_state_dict': unet_state,
-                    'optimizer_state_dict': optimizer.state_dict()
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'scheduler_state_dict': lr_scheduler.state_dict()
                 }, os.path.join(checkpoint_dir, f"ldm_epoch_best.pt"))
         # Save checkpoint only on rank 0
         if not use_ddp or dist.get_rank() == 0:
@@ -312,7 +330,8 @@ try:
             torch.save({
                 'epoch': epoch + 1,
                 'unet_state_dict': unet_state,
-                'optimizer_state_dict': optimizer.state_dict()
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': lr_scheduler.state_dict()
             }, os.path.join(checkpoint_dir, f"ldm_epoch_{epoch+1}.pt"))
             print(f"Checkpoint saved: ldm_epoch_{epoch+1}.pt")
         lr_scheduler.step()

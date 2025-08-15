@@ -9,6 +9,8 @@ CHECKPOINT_PATH = os.environ.get("CHECKPOINT_PATH", "./checkpoints/ldm_epoch_bes
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 LATENT_SHAPE = (4, 16, 16)  # (C, H, W) for 128x128 images with sd-vae-ft-ema
 VAE_SCALE = 0.18215
+NUM_INFERENCE_STEPS = int(os.environ.get("NUM_INFERENCE_STEPS", 50))
+GUIDANCE_SCALE = float(os.environ.get("GUIDANCE_SCALE", 7.5))
 
 # ---------- Load models ----------
 vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-ema").to(DEVICE)
@@ -62,8 +64,8 @@ def encode_prompts(prompts, negative_prompts=None, device=DEVICE):
 def generate(
     prompts,
     negative_prompts=None,
-    num_inference_steps=50,
-    guidance_scale=7.5,
+    num_inference_steps=NUM_INFERENCE_STEPS,
+    guidance_scale=GUIDANCE_SCALE,
     seed=None,
     out_path="samples.png",
     device=DEVICE,
@@ -118,9 +120,8 @@ if __name__ == "__main__":
             "A portrait of a young male with mustache with dark skin",
         ],
         negative_prompts="blurry, low quality",
-        num_inference_steps=1000,     # try 25–75
-        # guidance_scale=7.5,         # try 5–9
-        guidance_scale=7.5,         # try 5–9
+        num_inference_steps=NUM_INFERENCE_STEPS,
+        guidance_scale=GUIDANCE_SCALE,
         seed=42,
         out_path="preview_grid.png",
     )
