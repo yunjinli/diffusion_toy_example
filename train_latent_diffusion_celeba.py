@@ -99,7 +99,7 @@ try:
         layers_per_block=2,
         # block_out_channels=(128, 256, 512),
         # block_out_channels=(64, 128, 256),
-        block_out_channels=(64, 128, 256, 768),
+        block_out_channels=(64, 128, 256, 256),
         down_block_types=(
             "CrossAttnDownBlock2D",
             "CrossAttnDownBlock2D",

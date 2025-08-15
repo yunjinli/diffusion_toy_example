@@ -17,23 +17,27 @@ vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-ema").to(DEVICE)
 tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
 text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14").to(DEVICE)
 unet = UNet2DConditionModel(
-    sample_size=32,
-    in_channels=4,
-    out_channels=4,
-    layers_per_block=2,
-    block_out_channels=(64, 128, 256),
-    down_block_types=(
-        "CrossAttnDownBlock2D",
-        "CrossAttnDownBlock2D",
-        "DownBlock2D"
-    ),
-    up_block_types=(
-        "UpBlock2D",
-        "CrossAttnUpBlock2D",
-        "CrossAttnUpBlock2D"
-    ),
-    cross_attention_dim=text_encoder.config.hidden_size,
-).to(DEVICE)
+        sample_size=16,  # Latent size (VAE downsamples by 4)
+        in_channels=4,   # VAE latent channels
+        out_channels=4,
+        layers_per_block=2,
+        # block_out_channels=(128, 256, 512),
+        # block_out_channels=(64, 128, 256),
+        block_out_channels=(64, 128, 256, 256),
+        down_block_types=(
+            "CrossAttnDownBlock2D",
+            "CrossAttnDownBlock2D",
+            "CrossAttnDownBlock2D",
+            "DownBlock2D"
+        ),
+        up_block_types=(
+            "UpBlock2D",
+            "CrossAttnUpBlock2D",
+            "CrossAttnUpBlock2D",
+            "CrossAttnUpBlock2D"
+        ),
+        cross_attention_dim=text_encoder.config.hidden_size,
+    ).to(DEVICE)
 noise_scheduler = DDPMScheduler(num_train_timesteps=1000)
 
 # Load trained weights
