@@ -23,6 +23,8 @@ from distributed import (
     init_seeds
 )
 
+import lpips
+
 class AverageMeter:
     """Computes and stores the average and current value."""
     
@@ -163,6 +165,8 @@ try:
         print(f"Resumed at epoch {start_epoch}")
 
     best_loss = float('inf')
+    perceptual_loss_fn = lpips.LPIPS(net='vgg').to(DEVICE) # closer to "traditional" perceptual loss, when used for optimization
+    
     # Training loop
     for epoch in range(start_epoch, EPOCHS):
         loss_meter = AverageMeter()
@@ -199,7 +203,15 @@ try:
             # Predict noise in latent space
             noise_pred = unet(noisy_latents, timesteps, text_embeds).sample
             # Loss
-            loss = torch.nn.functional.mse_loss(noise_pred, noise)
+            loss = torch.nn.functional.mse_loss(noise_pred, noise) / (latents.var() + 1e-5)
+            
+            denoised_latents = (noisy_latents - noise_pred).clamp(-1, 1)
+            with torch.no_grad():
+                denoised_imgs = vae.decode(denoised_latents / 0.18215).sample.clamp(-1, 1)
+            
+            perceptual_loss = perceptual_loss_fn(denoised_imgs, images).mean()
+            loss += perceptual_loss * 0.1  # Adjust weight as needed
+            
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
@@ -211,7 +223,8 @@ try:
             if is_main_process():
                 monitor = {
                     'Loss': f'{loss_meter.val:.4f} ({loss_meter.avg:.4f})',
-                    'CUDA': f'{cuda_mem.val:.2f} ({cuda_mem.avg:.2f})'
+                    'CUDA': f'{cuda_mem.val:.2f} ({cuda_mem.avg:.2f})',
+                    'PLoss': f'{perceptual_loss.item():.4f}',
                 }
                 pbar.set_postfix(monitor)
             # Visualize denoised vs. ground truth every 5 steps

@@ -66,6 +66,7 @@ def sample_ldm(prompt, num_steps=1000, latent_shape=(1, 4, 32, 32)):
         # imgs = vae.decode(latents / 0.18215).sample.clamp(0, 1).cpu()
         imgs = vae.decode(latents / 0.18215).sample.clamp(-1, 1).cpu()
     # Convert to displayable format
+    imgs = (imgs * 0.5 + 0.5)
     img = imgs[0].permute(1, 2, 0).numpy()
     img = np.clip(img, 0, 1)
     img_bgr = cv2.cvtColor((img * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
