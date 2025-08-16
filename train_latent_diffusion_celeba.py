@@ -261,7 +261,7 @@ try:
                 monitor = {
                     'Loss': f'{loss_meter.val:.4f} ({loss_meter.avg:.4f})',
                     'CUDA': f'{cuda_mem.val:.2f} ({cuda_mem.avg:.2f})',
-                    'LR': f'{optimizer.param_groups[0]['lr']:.6f}',
+                    'LR': f'{optimizer.param_groups[0]["lr"]:.6f}',
                     # 'PLoss': f'{perceptual_loss.item():.4f}',
                 }
                 pbar.set_postfix(monitor)
