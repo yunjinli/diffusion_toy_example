@@ -396,38 +396,38 @@ try:
             #             panel = cv2.vconcat(grid)
             #             cv2.imshow('Denoised | Ground Truth', panel)
             #             cv2.waitKey(1)
-        if is_main_process():
-            unet_to_use = unet.module if use_ddp else unet
-            unet_to_use.eval()
+        # if is_main_process():
+        #     unet_to_use = unet.module if use_ddp else unet
+        #     unet_to_use.eval()
 
-            prompts = [
-                # use any held-out captions or attributes you like:
-                "a smiling young woman, brown hair, wavy, natural light",
-                "a man with black hair and glasses, studio portrait",
-                "a woman with blonde hair, bangs, smiling",
-                "a man with short brown hair, neutral expression",
-                "a close-up portrait, freckles, soft lighting",
-                "a high-contrast portrait, side lighting",
-                "a person with curly hair, cheerful",
-                "a portrait, shallow depth of field",
-            ][:8]  # keep batch small for quick preview
+        #     prompts = [
+        #         # use any held-out captions or attributes you like:
+        #         "a smiling young woman, brown hair, wavy, natural light",
+        #         "a man with black hair and glasses, studio portrait",
+        #         "a woman with blonde hair, bangs, smiling",
+        #         "a man with short brown hair, neutral expression",
+        #         "a close-up portrait, freckles, soft lighting",
+        #         "a high-contrast portrait, side lighting",
+        #         "a person with curly hair, cheerful",
+        #         "a portrait, shallow depth of field",
+        #     ][:8]  # keep batch small for quick preview
 
-            # sample with EMA weights without permanently swapping them
-            with ema.apply_to(unet_to_use):
-                imgs, _ = sample_images(
-                    unet=unet_to_use,
-                    vae=vae,
-                    text_encoder=text_encoder,
-                    tokenizer=tokenizer,
-                    prompts=prompts,
-                    steps=25,
-                    cfg_scale=4.0,
-                    seed=42,
-                    device=DEVICE,
-                    guidance_rescale=0.3,  # try 0.0 first; 0.3–0.5 if CFG artifacts
-                )
-            # save grid
-            save_grid(imgs.cpu(), os.path.join(checkpoint_dir, f"viz_samples/epoch{epoch+1:03d}_samples.png"), nrow=4)
+        #     # sample with EMA weights without permanently swapping them
+        #     with ema.apply_to(unet_to_use):
+        #         imgs, _ = sample_images(
+        #             unet=unet_to_use,
+        #             vae=vae,
+        #             text_encoder=text_encoder,
+        #             tokenizer=tokenizer,
+        #             prompts=prompts,
+        #             steps=25,
+        #             cfg_scale=4.0,
+        #             seed=42,
+        #             device=DEVICE,
+        #             guidance_rescale=0.3,  # try 0.0 first; 0.3–0.5 if CFG artifacts
+        #         )
+        #     # save grid
+        #     save_grid(imgs.cpu(), os.path.join(checkpoint_dir, f"viz_samples/epoch{epoch+1:03d}_samples.png"), nrow=4)
         if is_main_process():
             print(f"Epoch {epoch+1} finished.")
             print(f"Epoch {epoch+1} finished. LR: {optimizer.param_groups[0]['lr']:.6f}")
@@ -454,11 +454,11 @@ try:
                 'unet_ema_state_dict': ema.state_dict(),
             }, os.path.join(checkpoint_dir, f"ldm_epoch_{epoch+1}.pt"))
             print(f"Checkpoint saved: ldm_epoch_{epoch+1}.pt")
-        if not use_ddp or dist.get_rank() == 0:
-            unet.eval()
-            with ema.apply_to(unet.module if use_ddp else unet):
-                # call your sample_images(...) here
-                imgs = sample_images(unet, vae, text_encoder, tokenizer, prompts, steps=25, cfg=4.0, seed=42)
+        # if not use_ddp or dist.get_rank() == 0:
+        #     unet.eval()
+        #     with ema.apply_to(unet.module if use_ddp else unet):
+        #         # call your sample_images(...) here
+        #         imgs = sample_images(unet, vae, text_encoder, tokenizer, prompts, steps=25, cfg=4.0, seed=42)
         #     unet_ema = UNet2DConditionModel(
         #         sample_size=16, in_channels=4, out_channels=4,
         #         layers_per_block=2, block_out_channels=(64, 128, 256, 512),

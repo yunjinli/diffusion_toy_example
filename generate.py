@@ -114,10 +114,13 @@ if __name__ == "__main__":
     # Examples
     samples = generate(
         prompts=[
-            "A portrait of a person with long blond hair and wearing lipstick",
-            "A portrait of a male wearing glasses and earrings",
-            "A portrait of a young female with curly hair, and wearing a hat",
-            "A portrait of a young male with mustache with dark skin",
+            # "A portrait of a person with long blond hair and wearing lipstick",
+            # "A portrait of a male wearing glasses and earrings",
+            # "A portrait of a young female with curly hair, and wearing a hat",
+            # "A portrait of a young male with mustache with dark skin",
+            "A young woman smiling brightly.",
+            "An old man with gray hair and glasses.",
+            "A man with black hair and a mustache."
         ],
         negative_prompts="blurry, low quality",
         num_inference_steps=NUM_INFERENCE_STEPS,
