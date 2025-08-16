@@ -36,16 +36,36 @@ ckpt = torch.load(CHECKPOINT_PATH, map_location=DEVICE)
 #     # state saved via EMA.state_dict(); actual tensors under 'shadow'
 #     unet.load_state_dict(state["shadow"], strict=True)
 # else:
-unet.load_state_dict(ckpt["unet_state_dict"], strict=True)
+if "unet_ema_state_dict" in ckpt:
+    print("Loading EMA weights")
+    ema_state = ckpt["unet_ema_state_dict"]
+
+    # If you saved with EMA.state_dict(), weights live in ema_state["shadow"]
+    if "shadow" in ema_state:
+        shadow_weights = ema_state["shadow"]
+        # unwrap to plain dict of parameter tensors
+        shadow_weights = {k: v.to(DEVICE) for k, v in shadow_weights.items()}
+        unet.load_state_dict(shadow_weights, strict=True)
+    else:
+        # if you stored ema.copy_to(model).state_dict(), you can just load directly
+        unet.load_state_dict(ema_state, strict=True)
+else:
+    print("Loading raw UNet weights")
+    unet.load_state_dict(ckpt["unet_state_dict"], strict=True)
 
 vae.eval(); text_encoder.eval(); unet.eval()
 
 # DPMSolver, prediction type must MATCH training
-scheduler = DDPMScheduler(
-                            num_train_timesteps=1000,
-                            beta_schedule="squaredcos_cap_v2",
-                            prediction_type="v_prediction",
-                        )
+# scheduler = DDPMScheduler(
+#                             num_train_timesteps=1000,
+#                             beta_schedule="squaredcos_cap_v2",
+#                             prediction_type="v_prediction",
+#                         )
+scheduler = DPMSolverMultistepScheduler(
+    num_train_timesteps=1000,
+    prediction_type=PREDICTION_TYPE,
+    algorithm_type="dpmsolver++",
+)
 
 @torch.no_grad()
 def encode_prompts(prompts, negative_prompts=None, device=DEVICE):
