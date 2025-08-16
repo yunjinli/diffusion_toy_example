@@ -71,70 +71,148 @@ def predict_x0_from_modelpred(noisy_latents, model_pred, timesteps, scheduler, d
         pred_x0 = (noisy_latents - s * model_pred) / (a + 1e-8)
     return pred_x0
 
-@torch.no_grad()
-def sample_images(
+# @torch.no_grad()
+# def sample_images(
+#     unet,
+#     vae,
+#     text_encoder,
+#     tokenizer,
+#     prompts,
+#     steps=25,
+#     cfg_scale=4.0,
+#     seed=0,
+#     device="cuda",
+#     guidance_rescale=0.0,   # set ~0.3–0.7 to tame oversaturation if needed
+# ):
+#     """
+#     Returns a [0,1] float tensor in BCHW and also the raw latents.
+#     Expects UNet trained with prediction_type="v_prediction" and VAE scale 0.18215.
+#     """
+#     # --- scheduler (must match training pred type) ---
+#     scheduler = DPMSolverMultistepScheduler(
+#         num_train_timesteps=1000,
+#         prediction_type="v_prediction",
+#         algorithm_type="dpmsolver++",
+#     )
+#     scheduler.set_timesteps(steps, device=device)
+
+#     # --- text conditioning ---
+#     tok = tokenizer(
+#         prompts, padding="max_length", truncation=True, max_length=77, return_tensors="pt"
+#     ).to(device)
+#     cond = text_encoder(input_ids=tok.input_ids, attention_mask=tok.attention_mask).last_hidden_state
+
+#     tok_u = tokenizer([""] * len(prompts), padding="max_length", max_length=77, return_tensors="pt").to(device)
+#     uncond = text_encoder(input_ids=tok_u.input_ids, attention_mask=tok_u.attention_mask).last_hidden_state
+
+#     # --- latents ---
+#     g = torch.Generator(device=device).manual_seed(seed)
+#     latents = torch.randn(len(prompts), 4, 16, 16, generator=g, device=device)
+
+#     unet.eval()
+#     vae.eval()
+#     for t in scheduler.timesteps:
+#         # classifier-free guidance
+#         latent_in = torch.cat([latents, latents], dim=0)
+#         context = torch.cat([uncond, cond], dim=0)
+
+#         # UNet predicts v
+#         model_pred = unet(latent_in, t, encoder_hidden_states=context).sample
+#         pred_u, pred_c = model_pred.chunk(2, dim=0)
+
+#         guided = pred_u + cfg_scale * (pred_c - pred_u)
+
+#         # optional variance-preserving rescale (helps reduce "mush" at high CFG)
+#         if guidance_rescale > 0:
+#             with torch.no_grad():
+#                 std_c = pred_c.std(dim=list(range(1, pred_c.ndim)), keepdim=True)
+#                 std_g = guided.std(dim=list(range(1, guided.ndim)), keepdim=True) + 1e-6
+#                 guided = (1 - guidance_rescale) * guided + guidance_rescale * (guided * (std_c / std_g))
+
+#         latents = scheduler.step(guided, t, latents).prev_sample
+
+#     # --- decode ---
+#     imgs = vae.decode(latents / 0.18215).sample
+#     imgs = (imgs.clamp(-1, 1) + 1) / 2  # [0,1]
+#     return imgs, latents
+
+@torch.inference_mode()
+def sample_images_safe(
     unet,
     vae,
     text_encoder,
     tokenizer,
     prompts,
-    steps=25,
+    *,
+    steps=20,
     cfg_scale=4.0,
-    seed=0,
+    seed=42,
     device="cuda",
-    guidance_rescale=0.0,   # set ~0.3–0.7 to tame oversaturation if needed
+    latent_hw=(16,16),
+    batch_size=4,            # small micro-batch to limit VRAM
+    guidance_rescale=0.0,    # 0.0 first; 0.3–0.5 if CFG artifacts
+    scheduler_cfg=None       # pass train_scheduler.config if you have it
 ):
-    """
-    Returns a [0,1] float tensor in BCHW and also the raw latents.
-    Expects UNet trained with prediction_type="v_prediction" and VAE scale 0.18215.
-    """
-    # --- scheduler (must match training pred type) ---
-    scheduler = DPMSolverMultistepScheduler(
-        num_train_timesteps=1000,
-        prediction_type="v_prediction",
-        algorithm_type="dpmsolver++",
-    )
+    # ----- setup -----
+    unet.eval(); vae.eval(); text_encoder.eval()
+
+    if isinstance(prompts, str):
+        prompts = [prompts]
+
+    # scheduler with training beta schedule (recommended)
+    if scheduler_cfg is not None:
+        scheduler = DPMSolverMultistepScheduler.from_config(scheduler_cfg)
+        scheduler.config.prediction_type = scheduler_cfg.get("prediction_type", "v_prediction")
+    else:
+        scheduler = DPMSolverMultistepScheduler(
+            num_train_timesteps=1000,
+            prediction_type="v_prediction",
+            algorithm_type="dpmsolver++",
+        )
     scheduler.set_timesteps(steps, device=device)
 
-    # --- text conditioning ---
-    tok = tokenizer(
-        prompts, padding="max_length", truncation=True, max_length=77, return_tensors="pt"
-    ).to(device)
-    cond = text_encoder(input_ids=tok.input_ids, attention_mask=tok.attention_mask).last_hidden_state
-
-    tok_u = tokenizer([""] * len(prompts), padding="max_length", max_length=77, return_tensors="pt").to(device)
-    uncond = text_encoder(input_ids=tok_u.input_ids, attention_mask=tok_u.attention_mask).last_hidden_state
-
-    # --- latents ---
+    H, W = latent_hw
     g = torch.Generator(device=device).manual_seed(seed)
-    latents = torch.randn(len(prompts), 4, 16, 16, generator=g, device=device)
 
-    unet.eval()
-    vae.eval()
-    for t in scheduler.timesteps:
-        # classifier-free guidance
-        latent_in = torch.cat([latents, latents], dim=0)
-        context = torch.cat([uncond, cond], dim=0)
+    outputs = []
+    for i in range(0, len(prompts), batch_size):
+        chunk = prompts[i:i+batch_size]
 
-        # UNet predicts v
-        model_pred = unet(latent_in, t, encoder_hidden_states=context).sample
-        pred_u, pred_c = model_pred.chunk(2, dim=0)
+        # text embeds (cond/uncond)
+        tok = tokenizer(chunk, padding="max_length", truncation=True, max_length=77, return_tensors="pt").to(device)
+        cond = text_encoder(input_ids=tok.input_ids, attention_mask=tok.attention_mask).last_hidden_state
 
-        guided = pred_u + cfg_scale * (pred_c - pred_u)
+        tok_u = tokenizer([""]*len(chunk), padding="max_length", max_length=77, return_tensors="pt").to(device)
+        uncond = text_encoder(input_ids=tok_u.input_ids, attention_mask=tok_u.attention_mask).last_hidden_state
 
-        # optional variance-preserving rescale (helps reduce "mush" at high CFG)
-        if guidance_rescale > 0:
-            with torch.no_grad():
-                std_c = pred_c.std(dim=list(range(1, pred_c.ndim)), keepdim=True)
+        # latents
+        latents = torch.randn(len(chunk), 4, H, W, generator=g, device=device)
+
+        # optional: explicit sync so you see a stall boundary in logs
+        if torch.cuda.is_available(): torch.cuda.synchronize(device)
+
+        # denoising loop (two forward passes → lower peak mem than cat)
+        for t in scheduler.timesteps:
+            # uncond
+            eps_u = unet(latents, t, encoder_hidden_states=uncond).sample
+            # cond
+            eps_c = unet(latents, t, encoder_hidden_states=cond).sample
+
+            guided = eps_u + cfg_scale * (eps_c - eps_u)
+            if guidance_rescale > 0:
+                std_c = eps_c.std(dim=list(range(1, eps_c.ndim)), keepdim=True)
                 std_g = guided.std(dim=list(range(1, guided.ndim)), keepdim=True) + 1e-6
                 guided = (1 - guidance_rescale) * guided + guidance_rescale * (guided * (std_c / std_g))
 
-        latents = scheduler.step(guided, t, latents).prev_sample
+            latents = scheduler.step(guided, t, latents).prev_sample
 
-    # --- decode ---
-    imgs = vae.decode(latents / 0.18215).sample
-    imgs = (imgs.clamp(-1, 1) + 1) / 2  # [0,1]
-    return imgs, latents
+        if torch.cuda.is_available(): torch.cuda.synchronize(device)
+
+        imgs = vae.decode(latents / 0.18215).sample
+        imgs = (imgs.clamp(-1,1)+1)/2
+        outputs.append(imgs)
+
+    return torch.cat(outputs, dim=0)
 
 def save_grid(tensor, fp, nrow=4):
     grid = torchvision.utils.make_grid(tensor, nrow=nrow, padding=2)
@@ -428,6 +506,62 @@ try:
         #         )
         #     # save grid
         #     save_grid(imgs.cpu(), os.path.join(checkpoint_dir, f"viz_samples/epoch{epoch+1:03d}_samples.png"), nrow=4)
+        if is_main_process():
+            try:
+                # Optional: pass the exact training scheduler config so betas match
+                train_sched_cfg = {
+                    "num_train_timesteps": 1000,
+                    "beta_schedule": "squaredcos_cap_v2",
+                    "prediction_type": "v_prediction",
+                }
+
+                with ema.apply_to(unet.module if use_ddp else unet):  # if you have EMA
+                    imgs = sample_images_safe(
+                        unet=(unet.module if use_ddp else unet),
+                        vae=vae,
+                        text_encoder=text_encoder,
+                        tokenizer=tokenizer,
+                        prompts=[
+                            "a smiling young woman, brown hair",
+                            "a man with black hair and glasses",
+                            "portrait, freckles, soft lighting",
+                            "studio portrait, neutral expression",
+                        ],
+                        steps=20,                 # quick preview
+                        cfg_scale=4.0,
+                        seed=42,
+                        device=DEVICE,
+                        latent_hw=(16,16),
+                        batch_size=2,             # small to avoid OOM
+                        guidance_rescale=0.0,
+                        scheduler_cfg=train_sched_cfg,
+                    )
+                os.makedirs(os.path.join(checkpoint_dir, "viz_samples"), exist_ok=True)
+                torchvision.utils.save_image(imgs.cpu(), os.path.join(checkpoint_dir, f"viz_samples/epoch{epoch+1:03d}_samples.png"), nrow=2)
+                if torch.cuda.is_available(): torch.cuda.synchronize()
+                print("Preview saved.")
+            except torch.cuda.OutOfMemoryError:
+                print("OOM during sampling preview — lowering steps/batch and retrying.")
+                torch.cuda.empty_cache()
+                # retry smaller
+                with ema.apply_to(unet.module if use_ddp else unet):
+                    imgs = sample_images_safe(
+                        unet=(unet.module if use_ddp else unet),
+                        vae=vae,
+                        text_encoder=text_encoder,
+                        tokenizer=tokenizer,
+                        prompts=["portrait"],  # single image fallback
+                        steps=12,
+                        cfg_scale=3.0,
+                        seed=0,
+                        device=DEVICE,
+                        latent_hw=(16,16),
+                        batch_size=1,
+                        guidance_rescale=0.0,
+                        scheduler_cfg=train_sched_cfg,
+                    )
+                torchvision.utils.save_image(imgs.cpu(), os.path.join(checkpoint_dir, f"viz_samples/epoch{epoch+1:03d}_samples_oom_fallback.png"), nrow=1)
+
         if is_main_process():
             print(f"Epoch {epoch+1} finished.")
             print(f"Epoch {epoch+1} finished. LR: {optimizer.param_groups[0]['lr']:.6f}")
