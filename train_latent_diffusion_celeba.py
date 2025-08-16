@@ -5,7 +5,7 @@ from torchvision import transforms
 from diffusers import AutoencoderKL, UNet2DConditionModel, DDPMScheduler
 from transformers import CLIPTextModel, CLIPTokenizer
 from torch.cuda.amp import autocast, GradScaler
-from prepare_celeba import CelebATextDataset, IMG_DIR, ATTR_PATH
+from prepare_celeba import CelebATextDataset, IMG_DIR, ATTR_PATH, DIALOG_JSON
 from tqdm import tqdm
 import cv2
 import numpy as np
@@ -24,6 +24,7 @@ from distributed import (
     init_seeds
 )
 
+# from ema import EMA
 # import lpips
 
 class AverageMeter:
@@ -56,6 +57,58 @@ USE_AMP = torch.cuda.is_available() and bool(int(os.environ.get('USE_AMP', '1'))
 CFG_DROPOUT = float(os.environ.get('CFG_DROPOUT', 0.15))
 
 DEVICE, rank, world_size, local_rank = setup_distributed()
+
+def predict_x0_from_modelpred(noisy_latents, model_pred, timesteps, scheduler, device):
+    """Return pred_x0 for either epsilon- or v-pred models."""
+    abar = scheduler.alphas_cumprod.to(device)[timesteps].view(-1, 1, 1, 1)  # ᾱ_t
+    a = abar.sqrt()
+    s = (1.0 - abar).sqrt()
+    if scheduler.config.prediction_type == "v_prediction":
+        # x0 = a * x_t - s * v
+        pred_x0 = a * noisy_latents - s * model_pred
+    else:  # "epsilon"
+        # x0 = (x_t - s * eps) / a
+        pred_x0 = (noisy_latents - s * model_pred) / (a + 1e-8)
+    return pred_x0
+
+# @torch.no_grad()
+# def sample_with_ema(unet, vae, prompts, device, num_steps=30, cfg_scale=1.5, seed=0):
+#     # scheduler must MATCH training prediction_type ("v_prediction" if you changed it)
+#     scheduler = DDPMScheduler(
+#                             num_train_timesteps=1000,
+#                             beta_schedule="squaredcos_cap_v2",
+#                             prediction_type="v_prediction",
+#                         )
+#     scheduler.set_timesteps(num_steps, device=device)
+
+#     # text embeds
+#     inputs = tokenizer(prompts, padding="max_length", truncation=True, max_length=77, return_tensors="pt").to(device)
+#     cond = text_encoder(input_ids=inputs.input_ids, attention_mask=inputs.attention_mask).last_hidden_state
+#     uncond_inputs = tokenizer([""] * len(prompts), padding="max_length", truncation=True, max_length=77, return_tensors="pt").to(device)
+#     uncond = text_encoder(input_ids=uncond_inputs.input_ids, attention_mask=uncond_inputs.attention_mask).last_hidden_state
+
+#     # latents
+#     g = torch.Generator(device=device).manual_seed(seed)
+#     latents = torch.randn(len(prompts), 4, 16, 16, generator=g, device=device)
+
+#     unet.eval()
+#     for t in scheduler.timesteps:
+#         lat_in = torch.cat([latents, latents], dim=0)
+#         context = torch.cat([uncond, cond], dim=0)
+#         pred = unet(lat_in, t, encoder_hidden_states=context).sample
+#         n_u, n_c = pred.chunk(2, 0)
+
+#         # CFG with variance rescale (helps prevent mush)
+#         guided = n_u + cfg_scale * (n_c - n_u)
+#         std_c = n_c.std(dim=list(range(1, n_c.ndim)), keepdim=True)
+#         std_g = guided.std(dim=list(range(1, guided.ndim)), keepdim=True) + 1e-6
+#         guided = 0.7 * guided * (std_c / std_g) + 0.3 * guided
+
+#         latents = scheduler.step(guided, t, latents).prev_sample
+
+#     imgs = vae.decode(latents / 0.18215).sample
+#     imgs = (imgs.clamp(-1,1) + 1) / 2
+#     return imgs
 
 try:
     # Distributed training setup
@@ -120,13 +173,21 @@ try:
         ),
         cross_attention_dim=text_encoder.config.hidden_size,
     ).to(DEVICE)
-
+    
     if is_main_process():
         print(summary(unet))
 
     if use_ddp:
         unet = DDP(unet, device_ids=[local_rank])
-    noise_scheduler = DDPMScheduler(num_train_timesteps=1000)
+
+    # ema = EMA(model=unet, decay=0.9999, device='cpu')
+
+    # noise_scheduler = DDPMScheduler(num_train_timesteps=1000)
+    noise_scheduler = DDPMScheduler(
+                            num_train_timesteps=1000,
+                            beta_schedule="squaredcos_cap_v2",
+                            prediction_type="v_prediction",
+                        )
 
     # Load CelebA dataset
     transform = transforms.Compose([
@@ -135,7 +196,8 @@ try:
         transforms.ToTensor(),
         transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])  # Normalize to [-1, 1] for VAE
     ])
-    dataset = CelebATextDataset(IMG_DIR, ATTR_PATH, transform=transform)
+    # dataset = CelebATextDataset(IMG_DIR, ATTR_PATH, transform=transform)
+    dataset = CelebATextDataset(IMG_DIR, ATTR_PATH, transform=transform, dialog_json_path=DIALOG_JSON, dialog_prob=1.0)
     if is_main_process():
         print(f"Dataset size: {len(dataset)}")
     if use_ddp:
@@ -155,7 +217,7 @@ try:
     scaler = GradScaler(enabled=USE_AMP)
     
     # Checkpoint directory
-    checkpoint_dir = "checkpoints"
+    checkpoint_dir = "checkpoints_dialog"
 
     if not use_ddp or dist.get_rank() == 0:
         os.makedirs(checkpoint_dir, exist_ok=True)
@@ -174,6 +236,8 @@ try:
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         if 'scheduler_state_dict' in checkpoint:
             lr_scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        # if 'unet_ema_state_dict' in checkpoint:
+        #     ema.load_state_dict(checkpoint['unet_ema_state_dict'])
         start_epoch = checkpoint.get('epoch', 0)
         print(f"Resumed at epoch {start_epoch}")
 
@@ -229,30 +293,28 @@ try:
             timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (latents.shape[0],), device=DEVICE)
             noise = torch.randn_like(latents)
             noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
-            # Predict noise in latent space
-            # noise_pred = unet(noisy_latents, timesteps, text_embeds).sample
-            # Loss
-            # loss = torch.nn.functional.mse_loss(noise_pred, noise) / (latents.var() + 1e-5)
-            # loss = torch.nn.functional.mse_loss(noise_pred, noise)
+
             with autocast(enabled=USE_AMP):
-                noise_pred = unet(noisy_latents, timesteps, text_embeds).sample
-                loss = torch.nn.functional.mse_loss(noise_pred, noise)
-            # denoised_latents = (noisy_latents - noise_pred).clamp(-1, 1)
-            # with torch.no_grad():
-            #     denoised_imgs = vae.decode(denoised_latents / 0.18215).sample.clamp(-1, 1)
-            
-            # perceptual_loss = perceptual_loss_fn(denoised_imgs, images).mean()
-            # loss += perceptual_loss * 0.1  # Adjust weight as needed
-            
-            # loss.backward()
-            # optimizer.step()
+                # noise_pred = unet(noisy_latents, timesteps, text_embeds).sample
+                # loss = torch.nn.functional.mse_loss(noise_pred, noise)
+                model_pred = unet(noisy_latents, timesteps, text_embeds).sample  # predicts v
+                a_bar = noise_scheduler.alphas_cumprod.to(DEVICE)[timesteps].sqrt().view(-1,1,1,1)
+                s_bar = (1 - noise_scheduler.alphas_cumprod.to(DEVICE)[timesteps]).sqrt().view(-1,1,1,1)
+                v_target = a_bar * noise - s_bar * latents
+
+                # optional: Imagen-style SNR weighting (helps crispness)
+                snr = (a_bar**2) / (s_bar**2)
+                gamma = 5.0
+                w = torch.minimum(snr, torch.tensor(gamma, device=DEVICE))
+                loss = (w * (model_pred - v_target).pow(2)).mean()
+
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(unet.parameters(), 1.0)
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad()
-            # pbar.set_postfix({"loss": loss.item()})
+            # ema.update(unet)
 
             loss_meter.update(loss.item(), images.size(0))
             if torch.cuda.is_available():
@@ -271,8 +333,9 @@ try:
                     with torch.no_grad():
                         # Denoise latents (simple subtraction)
                         # denoised_latents = (noisy_latents - noise_pred).clamp(-1, 1)
-                        alpha_bar = noise_scheduler.alphas_cumprod[timesteps].view(-1, 1, 1, 1)  # (B,1,1,1)
-                        pred_x0 = (noisy_latents - torch.sqrt(1 - alpha_bar) * noise_pred) / torch.sqrt(alpha_bar)
+                        # alpha_bar = noise_scheduler.alphas_cumprod[timesteps].view(-1, 1, 1, 1)  # (B,1,1,1)
+                        # pred_x0 = (noisy_latents - torch.sqrt(1 - alpha_bar) * noise_pred) / torch.sqrt(alpha_bar)
+                        pred_x0 = predict_x0_from_modelpred(noisy_latents=noisy_latents, model_pred=model_pred, timesteps=timesteps, scheduler=noise_scheduler, device=DEVICE)
                         # Decode to image space
                         # if use_ddp:
                         #     denoised_imgs = vae.module.decode(denoised_latents / 0.18215).sample.clamp(0, 1).cpu()
@@ -321,7 +384,8 @@ try:
                     'epoch': epoch + 1,
                     'unet_state_dict': unet_state,
                     'optimizer_state_dict': optimizer.state_dict(),
-                    'scheduler_state_dict': lr_scheduler.state_dict()
+                    'scheduler_state_dict': lr_scheduler.state_dict(),
+                    # 'unet_ema_state_dict': ema.state_dict(),
                 }, os.path.join(checkpoint_dir, f"ldm_epoch_best.pt"))
         # Save checkpoint only on rank 0
         if not use_ddp or dist.get_rank() == 0:
@@ -334,6 +398,20 @@ try:
                 'scheduler_state_dict': lr_scheduler.state_dict()
             }, os.path.join(checkpoint_dir, f"ldm_epoch_{epoch+1}.pt"))
             print(f"Checkpoint saved: ldm_epoch_{epoch+1}.pt")
+        # if not use_ddp or dist.get_rank() == 0:
+        #     unet_ema = UNet2DConditionModel(
+        #         sample_size=16, in_channels=4, out_channels=4,
+        #         layers_per_block=2, block_out_channels=(64, 128, 256, 512),
+        #         down_block_types=("CrossAttnDownBlock2D","CrossAttnDownBlock2D","CrossAttnDownBlock2D","DownBlock2D"),
+        #         up_block_types=("UpBlock2D","CrossAttnUpBlock2D","CrossAttnUpBlock2D","CrossAttnUpBlock2D"),
+        #         cross_attention_dim=text_encoder.config.hidden_size,
+        #     ).to(DEVICE).eval()
+
+        #     ema.copy_to(unet_ema)  # <- loads EMA weights into this temp UNet
+
+        #     # (use your DPMSolver + low-CFG sampling function here)
+        #     imgs = sample_with_ema(unet_ema, vae, prompts, DEVICE, num_steps=30, cfg_scale=1.5, seed=42)
+        #     torchvision.utils.save_image(imgs, f"viz_samples/epoch{epoch+1:03d}_samples.png", nrow=4)
         lr_scheduler.step()
     cv2.destroyAllWindows()
     print("Latent diffusion training complete.")

@@ -6,13 +6,16 @@ from PIL import Image
 from torchvision import transforms
 from torch.utils.data import Dataset
 import matplotlib.pyplot as plt
+import json
+import random
+import cv2
 
 CELEBA_IMG_URL = "https://drive.google.com/uc?export=download&id=0B7EVK8r0v71pZjFTYXZWM3FlRnM"
 CELEBA_ATTR_URL = "https://drive.google.com/uc?export=download&id=0B7EVK8r0v71pblRyaVFSWGxPY0U"
 DATA_DIR = os.environ.get('DATA_DIR', "/mnt/sda/celeba")
 IMG_DIR = os.path.join(DATA_DIR, "img_align_celeba")
 ATTR_PATH = os.path.join(DATA_DIR, "list_attr_celeba.txt")
-
+DIALOG_JSON = os.path.join(DATA_DIR, "captions.json")
 # Download helper
 def download_file(url, dest):
     if not os.path.exists(dest):
@@ -107,23 +110,56 @@ def attr_to_caption(attr_row):
 
 # PyTorch Dataset
 class CelebATextDataset(Dataset):
-    def __init__(self, img_dir, attr_path, transform=None):
+    def __init__(self, img_dir, attr_path, transform=None, dialog_json_path=None, dialog_prob=0.5):
         self.img_dir = img_dir
         self.transform = transform
+        self.dialog_prob = dialog_prob
         # Load attributes
         df = pd.read_csv(attr_path, sep=r"\s+", skiprows=1)
         df = df.reset_index().rename(columns={"index": "image_id"})
+        # if df.columns[0] != "image_id":
+        #     cols = list(df.columns)
+        #     cols[0] = "image_id"
+        #     df.columns = cols
         self.df = df
+        # print(self.df)
+
+        self.dialog = {}
+        if dialog_json_path and os.path.exists(dialog_json_path):
+            with open(dialog_json_path, "r", encoding="utf-8") as f:
+                self.dialog = json.load(f)
+
 
     def __len__(self):
         return len(self.df)
 
+    def _caption_from_dialog(self, image_id):
+        entry = self.dialog.get(image_id, {})
+        cap = (entry.get("overall_caption") or "").strip()
+        if cap:
+            return " ".join(cap.split())  # light cleanup
+        # fallback: attribute-wise sentences if available
+        aw = entry.get("attribute_wise_captions") or {}
+        bits = [s for s in aw.values() if isinstance(s, str) and s.strip()]
+        if bits:
+            return " ".join(bits)
+        return None
+
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        img_path = os.path.join(self.img_dir, row["image_id"])
+        image_id = row["image_id"]
+        # print(image_id)
+        img_path = os.path.join(self.img_dir, image_id)
         image = Image.open(img_path).convert("RGB")
-        attr_row = row[1:].values.astype(int)
-        caption = attr_to_caption(attr_row)
+
+        # --- Decide which caption to use ---
+        use_dialog = (random.random() < self.dialog_prob) and (image_id in self.dialog)
+        if use_dialog:
+            caption = self._caption_from_dialog(image_id)
+        else:
+            attr_row = row[1:].astype(int).values
+            caption = attr_to_caption(attr_row)
+
         if self.transform:
             image = self.transform(image)
         return caption, image
@@ -134,10 +170,13 @@ if __name__ == "__main__":
         transforms.Resize((128, 128)),
         transforms.ToTensor()
     ])
-    dataset = CelebATextDataset(IMG_DIR, ATTR_PATH, transform=transform)
+    
+    dataset = CelebATextDataset(IMG_DIR, ATTR_PATH, transform=transform, dialog_json_path=DIALOG_JSON, dialog_prob=0.5)
     print("Example caption/image:")
-    caption, image = dataset[0]
+    caption, image = dataset[1]
     print(caption)
     print(image.shape)
     plt.imshow(image.permute(1, 2, 0).numpy())
     plt.show()
+    # cv2.imshow('Image', image.permute(1, 2, 0).numpy())
+    # cv2.waitKey(1)
